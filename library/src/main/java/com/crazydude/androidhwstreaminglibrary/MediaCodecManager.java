@@ -5,18 +5,13 @@ import android.hardware.Camera;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
-import android.os.Environment;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 
-import org.bytedeco.javacpp.avformat;
+import net.butterflytv.rtmp_client.RTMPMuxer;
 
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-
-import static org.bytedeco.javacpp.avformat.AVFormatContext;
-import static org.bytedeco.javacpp.avformat.avformat_alloc_context;
 
 /**
  * Created by kartavtsev.s on 12.04.2016.
@@ -26,7 +21,6 @@ public class MediaCodecManager implements Camera.PreviewCallback, SurfaceHolder.
     public static final String MIME_TYPE = "video/avc";
     private static final int FRAME_RATE = 25;
     private static final int IFRAME_INTERVAL = 5;
-    private AVFormatContext avFormatContext;
 
     private int mWidth = 640; // ширина видео
     private int mHeight = 480; // высота видео
@@ -39,26 +33,21 @@ public class MediaCodecManager implements Camera.PreviewCallback, SurfaceHolder.
     private MediaCodec.BufferInfo mBufferInfo = new MediaCodec.BufferInfo();
     private MediaFormat mVideoFormat;
     private int mCurrentFrame;
-    private FileOutputStream mFileOutputStream;
-//    private RTMPMuxer mMuxer;
+    private RTMPMuxer mMuxer;
 
     public MediaCodecManager(SurfaceView surfaceView) {
         mSurfaceView = surfaceView;
         mSurfaceView.getHolder().addCallback(this);
-        try {
-            avFormatContext = avformat_alloc_context();
-            avformat.AVOutputFormat oformat = avFormatContext.oformat();
-            oformat.video_codec()
-//            mMuxer = new RTMPMuxer();
-//            mMuxer.open("rtmp://ulc.network:1935/videochat/test");
-            mFileOutputStream = new FileOutputStream(Environment.getExternalStorageDirectory() + "/rofl.mp4");
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        mMuxer = new RTMPMuxer();
+        mMuxer.open("rtmp://ulc.network:1935/videochat/test");
     }
 
     private static long computePresentationTime(int frameIndex) {
         return 132 + frameIndex * 1000000 / FRAME_RATE;
+    }
+
+    private static int computeLivePresentationTime(int frameIndex) {
+        return frameIndex * (1000 / FRAME_RATE);
     }
 
     public void release() {
@@ -66,11 +55,7 @@ public class MediaCodecManager implements Camera.PreviewCallback, SurfaceHolder.
         mCamera.stopPreview();
         mCamera.release();
         mCamera = null;
-        try {
-            mFileOutputStream.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        mMuxer.close();
         mSurfaceView = null;
     }
 
@@ -99,8 +84,6 @@ public class MediaCodecManager implements Camera.PreviewCallback, SurfaceHolder.
     private void encodeFrame(byte[] data) {
         int inputBufferIndex = mMediaCodec.dequeueInputBuffer(-1);
 
-        mCurrentFrame++;
-
         if (inputBufferIndex >= 0) {
             byte[] tempBuffer = new byte[data.length];
             NV21toI420SemiPlanar(data, tempBuffer, mWidth, mHeight);
@@ -114,18 +97,15 @@ public class MediaCodecManager implements Camera.PreviewCallback, SurfaceHolder.
             ByteBuffer outputBuffer = mOutputBuffers[outputBufferIndex];
             byte[] tempBuffer = new byte[mBufferInfo.size];
             outputBuffer.get(tempBuffer);
-//            mMuxer.writeVideo(tempBuffer, 0, tempBuffer.length, (int) mBufferInfo.presentationTimeUs);
-            try {
-                mFileOutputStream.write(tempBuffer);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
+            mMuxer.writeVideo(tempBuffer, 0, tempBuffer.length, computeLivePresentationTime(mCurrentFrame));
             mMediaCodec.releaseOutputBuffer(outputBufferIndex, false);
         } else if (outputBufferIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
             mOutputBuffers = mMediaCodec.getOutputBuffers();
         } else if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
             mVideoFormat = mMediaCodec.getOutputFormat();
         }
+
+        mCurrentFrame++;
     }
 
     private void init() {
